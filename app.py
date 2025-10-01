@@ -11,8 +11,8 @@ from ui_tabs import *
 
 from dotenv import load_dotenv
 load_dotenv()
-# google_api_key = os.getenv("GOOGLE_API_KEY")
-anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
+google_api_key = os.getenv("GOOGLE_API_KEY")
+# anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
 
 
 # Database setup
@@ -88,10 +88,10 @@ def main():
     with st.sidebar:
         with st.sidebar:
             st.header("Configuration")
-            if anthropic_api_key:
+            if google_api_key:
                 st.success("✅ API key loaded from environment")
             else:
-                st.error("❌ Anthropic not found in .env")
+                st.error("❌ Google API key not found in .env")
 
         st.divider()
         st.subheader("Database Records")
@@ -112,7 +112,7 @@ def main():
 
     uploaded_file = st.file_uploader("Upload Prescription PDF", type=["pdf"])
 
-    if uploaded_file and anthropic_api_key:
+    if uploaded_file and google_api_key:
         unique_id = str(uuid.uuid4())
         temp_path = f"temp_{unique_id}.pdf"
 
@@ -122,7 +122,7 @@ def main():
         with st.spinner("Processing prescription..."):
             result = process_prescription(
                 pdf_path=temp_path,
-                anthropic_api_key=anthropic_api_key,
+                google_api_key=google_api_key,
                 output_path=f"result_{unique_id}.json"
             )
 
@@ -171,25 +171,55 @@ def main():
         ])
 
         with tabs[0]:
-            render_prescription_data(result["prescription_data"])
+            if "prescription_data" in result:
+                render_prescription_data(result["prescription_data"])
+            else:
+                st.error("Prescription data not found in results")
         with tabs[1]:
-            render_license_verification(result["license_verification"])
+            if "license_verification" in result:
+                render_license_verification(result["license_verification"])
+            else:
+                st.error("License verification data not found in results")
         with tabs[2]:
-            render_dea_verification(result["dea_verification"])
+            if "dea_verification" in result:
+                render_dea_verification(result["dea_verification"])
+            else:
+                st.error("DEA verification data not found in results")
         with tabs[3]:
-            render_state_compliance(result["state_compliance"])
+            if "state_compliance" in result:
+                render_state_compliance(result["state_compliance"])
+            else:
+                st.error("State compliance data not found in results")
         with tabs[4]:
-            render_controlled_substance_check(result["controlled_substance_check"])
+            if "controlled_substance_check" in result:
+                render_controlled_substance_check(result["controlled_substance_check"])
+            else:
+                st.error("Controlled substance check data not found in results")
         with tabs[5]:
-            render_dosage_monitoring(result["dosage_monitoring"])
+            if "dosage_monitoring" in result:
+                render_dosage_monitoring(result["dosage_monitoring"])
+            else:
+                st.error("Dosage monitoring data not found in results")
         with tabs[6]:
-            render_bud_validation(result["bud_validation"])
+            if "bud_validation" in result:
+                render_bud_validation(result["bud_validation"])
+            else:
+                st.error("BUD validation data not found in results")
         with tabs[7]:
-            render_compounding_compliance(result["compounding_compliance"])
+            if "compounding_compliance" in result:
+                render_compounding_compliance(result["compounding_compliance"])
+            else:
+                st.error("Compounding compliance data not found in results")
         with tabs[8]:
-            render_clinical_documentation(result["clinical_documentation"])
+            if "clinical_documentation" in result:
+                render_clinical_documentation(result["clinical_documentation"])
+            else:
+                st.error("Clinical documentation data not found in results")
         with tabs[9]:
-            render_case_summary(result["case_summary"])
+            if "case_summary" in result:
+                render_case_summary(result["case_summary"])
+            else:
+                st.error("Case summary not found in results")
         with tabs[10]:
             render_final_review(result)
 
@@ -216,8 +246,8 @@ def main():
             mime="application/pdf"
         )
 
-    elif uploaded_file and not anthropic_api_key:
-        st.error("Please enter your anthropic_api_key to process the prescription")
+    elif uploaded_file and not google_api_key:
+        st.error("Please enter your Google API key to process the prescription")
 
 if __name__ == "__main__":
     main()
