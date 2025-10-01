@@ -1,5 +1,6 @@
 import json
 import re
+import os
 import base64
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
@@ -9,6 +10,8 @@ from PIL import Image
 import fitz
 
 from langchain_google_genai import ChatGoogleGenerativeAI
+# from langchain_anthropic import ChatAnthropic
+
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
@@ -71,6 +74,12 @@ class RxSentinelAgents:
             google_api_key=google_api_key,
             temperature=0.1
         )
+        # self.llm = ChatAnthropic(
+        #     # model="claude-sonnet-4-20250514",
+        #     model="claude-3-7-sonnet-20250219",
+        #     api_key=os.getenv("ANTHROPIC_API_KEY"),
+        #     temperature=0.1
+        # )
         self.alerts = []
         self.audit_trail = []
         
@@ -113,28 +122,26 @@ class RxSentinelAgents:
         
         return workflow.compile()
 
+
     def ocr_nlp_agent(self, state: RxState) -> RxState:
         """Agent 1: OCR + NLP for prescription data extraction"""
         try:
-            system_prompt = """You are a medical AI agent that extracts structured data from handwritten prescriptions.
-            Analyze the image and extract ALL visible information including:
+            system_prompt = """You are a medical AI agent that extracts structured data from prescriptions.
+            Analyze the image and extract ALL visible information including ALL medications — even non-pill items like injection kits, syringes, insulin pens, alcohol wipes, etc. — regardless of completeness.
             - Doctor information (name, qualifications, department, hospital, contact, license numbers, DEA number)
             - Patient information (name, age, gender, address, insurance info)
             - Prescription details (date, medications with dosage, frequency, duration, instructions)
+            - Pharmacy information (name, address, phone)
             - Any stamps, signatures, or official markings
-            - If signature is present then return true otherwise false
+            - If the signature is not clearly visible, set "Signature Present" to false. This must always be included.
             - Very important: Check if any medication is a controlled substance. If so, set "Is Controlled" to true and provide the correct "Controlled Schedule" (e.g., Schedule II, III, etc.)
-
-            For medication quantities, use specific examples based on the medication type:
-            - Tablets/Capsules: Use numeric values like "30", "60", "90"
-            - Liquid medications: Use volume measurements like "30 ML", "15 ML", "2.5 ML"
-            - Creams/Gels: Use volume measurements like "30 ML", "15 ML"
-            - Injectables: Use volume measurements like "10 ML", "5 ML", "2 ML"
-            - Troches/ODT: Use numeric counts like "30", "60"
+           
+            If a medication is partially illegible or missing details like frequency or duration, include it anyway with unknown fields marked as "unknown".
+            Never skip any medication just because it looks like a device, has a brand name, or contains unclear dosage — list everything under "Medications" and use "unknown" if needed.
+            
+            For ALL medication quantities, ONLY use integer numbers (e.g., 30, 60, 90). Do not include units or text descriptions in the Quantity field.
 
             IMPORTANT: For compound medications, if you recognize any of the following medications, replace the quantity field with the corresponding medical justification text:
-
-            COMPOUND MEDICATION JUSTIFICATIONS:
             - ACNE ULTRA (CLINDAMYCIN PHOSPHATE / NIACINAMIDE / TRETINOIN): "The patient requires compounded Clindamycin/Niacinamide/Tretinoin combination gel to facilitate appropriate distribution and absorption to ensure patient receives the necessary dosage strength."
             - ANASTROZOLE: "The patient requires compounded Anastrozole tablets due to the commercial tablet being small, coated and unscored. If patient were to attempt to split the tablet, the dose would be inaccurate."
             - BIOTIN / FINASTERIDE / MINOXIDIL: "The patient requires compounded Biotin/Finasteride/Minoxidil capsules due to a suspected lactose sensitivity."
@@ -169,34 +176,21 @@ class RxSentinelAgents:
             - THYROID (DESICCATED PORCINE): "The patient requires a custom compounded Desiccated Porcine Thyroid without sugars and lactose due to suspected sensitivities."
             - VARDENAFIL ODT: "The patient requires compounded Vardenafil orally disintegrating tablets to mitigate first-pass metabolism, enhancing absorption for a quicker onset and improved clinical outcomes. In contrast, the commercially available alternative lacks scoring and is not recommended to be split, crushed, or chewed, posing a risk of inaccurate dosing if such attempts are made."
             - VARDENAFIL TROCHE: "The patient necessitates specially compounded Vardenafil troches to mitigate first-pass metabolism, enhancing absorption for a quicker onset and improved clinical outcomes. In contrast, the commercially available alternative lacks scoring and is not recommended to be split, crushed, or chewed, posing a risk of inaccurate dosing if such attempts are made."
-
-            If the medication matches any of these compound medications, use the corresponding justification text in the "Quantity" field instead of numeric values.
-
-            Refer to the format below and strictly follow it. Do not make assumptions. Use the actual information from the prescription image.
-
-            Return ONLY valid JSON in this exact format:
-            {
+            """            
+            
+            # JSON schema
+            json_structure = {
                 "Doctor Info": {
                     "Name": "",
                     "Qualification": "",
                     "Department": "",
                     "Address": "",
-                    "State": ""
+                    "State": "",
                     "Hospital": "",
                     "Phone": "",
                     "Fax": "",
-                    "License Numbers": [
-                        {
-                            "State": "",
-                            "License Number": ""
-                        }
-                    ],
-                    "DEA Numbers": [
-                        {
-                            "State": "",
-                            "DEA Number": ""
-                        }
-                    ],
+                    "License Numbers": [{"State": "", "License Number": ""}],
+                    "DEA Numbers": [{"State": "", "DEA Number": ""}]
                 },
                 "Patient Info": {
                     "Name": "",
@@ -215,27 +209,25 @@ class RxSentinelAgents:
                     "Email": ""
                 },
                 "Prescription Date": "",
-                "Medications": [
-                    {
-                        "Name": "",
-                        "Generic Name": "",
-                        "Dosage": "",
-                        "Strength": "",
-                        "Frequency": "",
-                        "Duration": "",
-                        "Quantity": "",
-                        "Refills": "",
-                        "Instructions": "",
-                        "Route": "",
-                        "Is Controlled": true/false,
-                        "Controlled Schedule": "",
-                        "Form": "",
-                        "Quality_Notes": ""
-                    }
-                ],
+                "Medications": [{
+                    "Name": "",
+                    "Generic Name": "",
+                    "Dosage": "",
+                    "Strength": "",
+                    "Frequency": "",
+                    "Duration": "",
+                    "Quantity": "",
+                    "Refills": "",
+                    "Instructions": "",
+                    "Route": "",
+                    "Is Controlled": False,
+                    "Controlled Schedule": "",
+                    "Form": "",
+                    "Quality_Notes": ""
+                }],
                 "Prescription ID": "",
                 "Additional Notes": "",
-                "Signature Present": true/false,
+                "Signature Present": False,
                 "Date Written": "",
                 "Pharmacy Info": {
                     "Name": "",
@@ -244,50 +236,58 @@ class RxSentinelAgents:
                 }
             }
 
-            Examples of proper quantity formatting:
-            - ACNE ULTRA GEL: Quantity = "30 ML"
-            - ANASTROZOLE TABLET: Quantity = "30" or "60" (tablet count)
-            - TESTOSTERONE CREAM: Quantity = "15 ML" or "30 ML"
-            - HYDROXOCOBALAMIN INJECTABLE: Quantity = "10 ML"
-            - PROGESTERONE CAPSULE: Quantity = "30" (capsule count)
-            - SILDENAFIL ODT: Quantity = "30" (tablet count)
-            - TESTOSTERONE NASAL GEL: Quantity = "3 ML PEN"
+            escaped_json = json.dumps(json_structure, indent=2).replace("{", "{{").replace("}", "}}")
 
-            Always specify the unit of measurement for quantities (ML for liquids, count for solid dosage forms).
-            """            
-            # Initialize messages if not present
             if "messages" not in state:
                 state["messages"] = []
-            
-            message = HumanMessage(
-                content=[
-                    {"type": "text", "text": system_prompt},
-                    {"type": "image_url", "image_url": f"data:image/png;base64,{state['image_data']}"}
-                ]
-            )
-            
-            state["messages"].append(message)
-            
-            result = self.llm.invoke([message])
-            
-            # Clean and parse the JSON response
-            json_text = self._clean_json_response(result.content)
-            prescription_data = json.loads(json_text)
-            
-            # Add AI response to messages
-            ai_message = AIMessage(content=f"OCR extraction complete. Found {len(prescription_data.get('medications', []))} medications.")
+
+            image_list = state["image_data"]
+            if isinstance(image_list, str):
+                image_list = [image_list]
+
+            image_prompts = [
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img}"}}
+                for img in image_list
+            ]
+
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", system_prompt),
+                ("human", [
+                    {"type": "text", "text": f"""Extract prescription data from the attached images.
+
+                    Return data in this EXACT JSON format:
+                    {escaped_json}
+
+                    Ensure ALL fields are present. Use empty strings or arrays for missing data.
+                    Return ONLY valid JSON, no extra text."""}
+                                ] + image_prompts)
+                            ])
+
+            parser = JsonOutputParser()
+            chain = prompt | self.llm | parser
+            result = chain.invoke({})
+
+            if not result or not isinstance(result, dict):
+                raise ValueError("OCR returned empty or invalid JSON.")
+
+            prescription_data = result
+            prescription_data.setdefault("Medications", [])
+            prescription_data.setdefault("Doctor Info", {})
+            prescription_data.setdefault("Patient Info", {})
+            prescription_data.setdefault("Pharmacy Info", {})
+
+            ai_message = AIMessage(content=f"OCR extraction complete. Found {len(prescription_data.get('Medications', []))} medications.")
             state["messages"].append(ai_message)
-            
-            # Add audit trail
+
             self._add_audit_entry("OCR_NLP", "Prescription data extracted successfully", prescription_data)
-            
             state["prescription_data"] = prescription_data
             return state
-            
+
         except Exception as e:
             self._add_alert("error", "OCR_NLP", f"Failed to extract prescription data: {str(e)}", 5, True)
             state["prescription_data"] = {}
             return state
+
 
     def license_verification_agent(self, state: RxState) -> RxState:
         """Agent 2: Provider License Verification using LLM"""
@@ -1150,7 +1150,7 @@ class RxSentinelAgents:
             
             Return JSON with:
             {{
-                "approval_status": "approved/rejected/requires_review",
+                "approval_status": "approved/requires_review",
                 "confidence_score": float 0-1,
                 "critical_issues": [str],
                 "recommended_actions": [str],
@@ -1349,41 +1349,55 @@ class RxSentinelAgents:
 
 def main(pdf_path: str, google_api_key: str, output_path: str = None):
     """
-    Main function to process a PDF prescription through the RxSentinel workflow
-
-    Args:
-        pdf_path (str): Path to the PDF file
-        google_api_key (str): Google API key for Gemini
-        output_path (str, optional): Path to save the JSON result. If None, saves as 'prescription_result.json'
-
-    Returns:
-        dict: Final processing result
+    Process a PDF or image prescription through the RxSentinel workflow, sending ALL PDF pages (as images) to Claude.
     """
     try:
+        import fitz
+        from PIL import Image
+        from io import BytesIO
+        import base64
+        import os
+
         # Set default output path if not provided
         if output_path is None:
             output_path = "prescription_result.json"
 
-        # Step 1: Extract first image from PDF using PyMuPDF (fitz)
-        doc = fitz.open(pdf_path)
-        page = doc.load_page(0)  # 0-based indexing for first page
-        pix = page.get_pixmap()
-        image = Image.open(BytesIO(pix.tobytes("png")))
+        # Step 1: Detect if file is PDF or image
+        file_ext = os.path.splitext(pdf_path)[-1].lower()
+        image_contents = []
 
-        # Convert image to base64
-        buffered = BytesIO()
-        image.save(buffered, format="PNG")
-        image_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
-        print("Image extracted successfully")
+        if file_ext == ".pdf":
+            # --- PDF Mode: extract ALL pages as high-res images ---
+            doc = fitz.open(pdf_path)
+            for i in range(len(doc)):
+                page = doc.load_page(i)
+                pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))  # 2x scale for clarity
+                image = Image.open(BytesIO(pix.tobytes("png")))
+                buffered = BytesIO()
+                image.save(buffered, format="PNG")
+                img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
+                image_contents.append(img_base64)
+            print(f"Extracted {len(image_contents)} images from PDF.")
+        elif file_ext in [".png", ".jpg", ".jpeg"]:
+            # --- Image Mode: just read and encode single image ---
+            with open(pdf_path, "rb") as f:
+                img_base64 = base64.b64encode(f.read()).decode("utf-8")
+                image_contents.append(img_base64)
+            print("Loaded single image.")
+        else:
+            raise ValueError("Unsupported file type: only PDF and image files are supported.")
+
+        # Optional: save first image for debugging
+        Image.open(BytesIO(base64.b64decode(image_contents[0]))).save("debug_extracted.png")
 
         # Step 2: Initialize RxSentinel workflow
         print("Initializing RxSentinel workflow...")
         rx_sentinel = RxSentinelAgents(google_api_key)
         workflow = rx_sentinel.create_workflow()
 
-        # Step 3: Prepare initial state
+        # Step 3: Prepare initial state (send ALL images!)
         initial_state = {
-            "image_data": image_base64,
+            "image_data": image_contents,   # <--- List of images
             "document_type": "prescription",
             "messages": [],
             "prescription_data": {},
@@ -1425,15 +1439,16 @@ def main(pdf_path: str, google_api_key: str, output_path: str = None):
             error_count = len([a for a in alerts if a.get('type') == 'error'])
             warning_count = len([a for a in alerts if a.get('type') == 'warning'])
             print(f"Errors: {error_count}, Warnings: {warning_count}")
-
             if error_count > 0:
                 print("\nCritical Issues Found:")
                 for alert in alerts:
                     if alert.get('type') == 'error':
                         print(f"  - {alert.get('category')}: {alert.get('message')}")
-
         print(f"\nDetailed results saved to: {output_path}")
         print("=" * 50)
+
+        # For compatibility, also add first image as `image_data` (for display)
+        final_result["image_data"] = f"data:image/png;base64,{image_contents[0]}"
 
         return final_result
 
@@ -1452,10 +1467,8 @@ def main(pdf_path: str, google_api_key: str, output_path: str = None):
             }],
             "audit_trail": []
         }
-
         if output_path:
             with open(output_path, 'w', encoding='utf-8') as f:
                 json.dump(error_result, f, indent=2, ensure_ascii=False, default=str)
-
         print(f"Error processing prescription: {str(e)}")
         return error_result
